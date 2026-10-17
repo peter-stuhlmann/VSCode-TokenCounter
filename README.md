@@ -1,6 +1,8 @@
-# Claude Token Tracker
+# Token Tracker for Claude Code
 
 VS-Code-Extension, die zählt, wie viele Claude-Code-Tokens du für ein Projekt, eine Aufgabe oder eine einzelne Claude-Sitzung verbrauchst – mit Start, Pause und Stopp, aufgeschlüsselt nach Modell und mit theoretischem API-Preis.
+
+> Kein offizielles Produkt von Anthropic und nicht mit Anthropic verbunden. „Claude" und „Claude Code" sind Marken von Anthropic.
 
 ## Bedienung
 
@@ -118,7 +120,7 @@ Plattformunterschiede, die die Extension berücksichtigt:
 ```sh
 npm install                # Test-Werkzeuge, richtet auch den Git-Hook ein
 npx @vscode/vsce package
-code --install-extension claude-token-tracker-0.1.0.vsix
+code --install-extension token-tracker-for-claude-code-0.1.0.vsix
 ```
 
 Zum Entwickeln den Ordner in VS Code öffnen und `F5` drücken.

@@ -1,6 +1,6 @@
 {
-  "name": "claude-token-tracker",
-  "displayName": "Claude Token Tracker",
+  "name": "token-tracker-for-claude-code",
+  "displayName": "Token Tracker for Claude Code",
   "description": "Start/Pause/Stopp-Tracking der Claude-Code-Tokens pro Projekt, Aufgabe oder Sitzung – nach Modell, mit theoretischem API-Preis.",
   "version": "0.1.0",
   "publisher": "peter-stuhlmann",
@@ -99,7 +99,7 @@
       }
     ],
     "configuration": {
-      "title": "Claude Token Tracker",
+      "title": "Token Tracker for Claude Code",
       "properties": {
         "tokenTracker.statusBarMetric": {
           "type": "string",

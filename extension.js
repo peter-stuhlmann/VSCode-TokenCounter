@@ -1,4 +1,4 @@
-// Claude Token Tracker – VS-Code-Teil: Statusleiste, Befehle, Dialoge, Panel, Speicherung.
+// Token Tracker for Claude Code – VS-Code-Teil: Statusleiste, Befehle, Dialoge, Panel, Speicherung.
 // Das eigentliche Zählen steckt in core.js (ohne VS-Code-Abhängigkeit, direkt testbar),
 // die Preise in prices.js, die Anzeige für die Claude-Code-Statuszeile in statusline.js.
 //
@@ -297,7 +297,7 @@ async function warnFormat(file) {
   formatProblem = file || true;
   render();
   const choice = await vscode.window.showWarningMessage(
-    'Claude Token Tracker: Das Transkript-Format von Claude Code wird nicht erkannt – vermutlich nach einem ' +
+    'Token Tracker: Das Transkript-Format von Claude Code wird nicht erkannt – vermutlich nach einem ' +
       'Claude-Code-Update. Tokens werden eventuell nicht oder unvollständig gezählt.',
     ...(typeof formatProblem === 'string' ? ['Transkript öffnen'] : [])
   );
@@ -826,7 +826,7 @@ function tooltip() {
   const md = new vscode.MarkdownString('', true);
   md.supportHtml = true;
   if (!session) {
-    md.appendMarkdown('**Claude Token Tracker**\n\n');
+    md.appendMarkdown('**Token Tracker for Claude Code**\n\n');
     md.appendMarkdown('$(play) Klicken, um eine Messung zu starten  \n$(graph) Ältere Messungen über „Verlauf" daneben');
     return md;
   }
@@ -1024,7 +1024,7 @@ function activate(context) {
   installStatusLineScript();
 
   sbMain = vscode.window.createStatusBarItem('tokenTracker.main', vscode.StatusBarAlignment.Left, 100);
-  sbMain.name = 'Claude Token Tracker';
+  sbMain.name = 'Token Tracker for Claude Code';
   sbPause = vscode.window.createStatusBarItem('tokenTracker.pause', vscode.StatusBarAlignment.Left, 99);
   sbPause.name = 'Token Tracker: Pause';
   sbPause.command = 'tokenTracker.togglePause';
