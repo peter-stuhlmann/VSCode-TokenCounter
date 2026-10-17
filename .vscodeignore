@@ -1,0 +1,9 @@
+*.vsix
+.playwright-mcp/**
+.vscode-test/**
+node_modules/**
+test/**
+.github/**
+.githooks/**
+media/icon.svg
+.gitignore

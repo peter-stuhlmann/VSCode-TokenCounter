@@ -1,0 +1,4 @@
+*.vsix
+.playwright-mcp/
+.vscode-test/
+node_modules/

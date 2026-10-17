@@ -1,0 +1,9 @@
+#!/bin/sh
+# Vor jedem Commit die schnellen Tests ausführen (Kern, Preise, Statuszeile,
+# Extension-Ablauf, Panel). Eingerichtet über "npm install" (Skript "prepare").
+# Im Notfall überspringen: git commit --no-verify
+node --test --test-reporter=dot "test/*.test.js" || {
+  echo ""
+  echo "Tests fehlgeschlagen – Commit abgebrochen. Details: npm test"
+  exit 1
+}

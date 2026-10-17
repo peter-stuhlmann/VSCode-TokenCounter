@@ -1,0 +1,142 @@
+{
+  "name": "claude-token-tracker",
+  "displayName": "Claude Token Tracker",
+  "description": "Start/Pause/Stopp-Tracking der Claude-Code-Tokens pro Projekt, Aufgabe oder Sitzung – nach Modell, mit theoretischem API-Preis.",
+  "version": "0.1.0",
+  "publisher": "peter-stuhlmann",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/peter-stuhlmann/VSCode-TokenCounter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/peter-stuhlmann/VSCode-TokenCounter/issues"
+  },
+  "homepage": "https://github.com/peter-stuhlmann/VSCode-TokenCounter#readme",
+  "icon": "media/icon.png",
+  "keywords": [
+    "claude",
+    "claude code",
+    "tokens",
+    "usage",
+    "tracking",
+    "anthropic"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "test:vscode": "node test/vscode/run.js",
+    "vscode:prepublish": "npm test",
+    "prepare": "git config core.hooksPath .githooks && node -e \"require('fs').chmodSync('.githooks/pre-commit', 0o755)\""
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Liest die lokalen Claude-Code-Transkripte und braucht dafür ein echtes Dateisystem."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "tokenTracker.start",
+        "title": "Start",
+        "category": "Token Tracker"
+      },
+      {
+        "command": "tokenTracker.togglePause",
+        "title": "Pause / Fortsetzen",
+        "category": "Token Tracker"
+      },
+      {
+        "command": "tokenTracker.pause",
+        "title": "Pause",
+        "category": "Token Tracker"
+      },
+      {
+        "command": "tokenTracker.resume",
+        "title": "Fortsetzen",
+        "category": "Token Tracker"
+      },
+      {
+        "command": "tokenTracker.stop",
+        "title": "Stopp & speichern",
+        "category": "Token Tracker"
+      },
+      {
+        "command": "tokenTracker.discard",
+        "title": "Verwerfen",
+        "category": "Token Tracker"
+      },
+      {
+        "command": "tokenTracker.showPanel",
+        "title": "Details & Verlauf anzeigen",
+        "category": "Token Tracker"
+      },
+      {
+        "command": "tokenTracker.setupStatusLine",
+        "title": "In der Claude-Code-Statuszeile anzeigen",
+        "category": "Token Tracker"
+      },
+      {
+        "command": "tokenTracker.switchSession",
+        "title": "Andere Claude-Sitzung wählen",
+        "category": "Token Tracker"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Token Tracker",
+      "properties": {
+        "tokenTracker.statusBarMetric": {
+          "type": "string",
+          "enum": [
+            "noCacheRead",
+            "total",
+            "output"
+          ],
+          "enumDescriptions": [
+            "Input + Output + Cache-Write (ohne die sehr großen, günstigen Cache-Reads)",
+            "Alle Tokens inklusive Cache-Read",
+            "Nur Output-Tokens"
+          ],
+          "default": "noCacheRead",
+          "description": "Welche Token-Zahl in der Statusleiste angezeigt wird."
+        },
+        "tokenTracker.showCost": {
+          "type": "boolean",
+          "default": true,
+          "description": "Theoretischen API-Preis (USD) in der Statusleiste anzeigen."
+        },
+        "tokenTracker.idlePauseMinutes": {
+          "type": "number",
+          "default": 15,
+          "minimum": 0,
+          "description": "Automatisch pausieren, wenn so viele Minuten keine Tokens kamen (0 = aus). Die Leerlaufzeit zählt nicht als aktive Zeit; kommen neue Tokens, läuft das Tracking von selbst weiter."
+        },
+        "tokenTracker.prices": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Eigene Preise (USD pro 1 Mio. Tokens) für Modelle, die fehlen oder abweichen, z. B. `{ \"claude-neues-modell\": { \"input\": 3, \"output\": 15, \"cacheRead\": 0.3 } }`. Cache-Writes werden mit 1,25× (5 min) bzw. 2× (1 h) Input-Preis berechnet."
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^3.1.0",
+    "playwright-core": "^1.64.1"
+  }
+}

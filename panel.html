@@ -1,0 +1,559 @@
+<!doctype html>
+<!--
+  Panel „Token Tracker" (VS-Code-Webview).
+
+  Datenfluss: Die Extension schickt bei jeder Änderung {type: 'state', current, history,
+  pricesAsOf} per postMessage. Das Panel rendert daraus alles neu – aber nur Bereiche, deren
+  HTML sich wirklich geändert hat (setHtml), damit nichts flackert oder springt.
+  Zurück gehen nur einfache Nachrichten (command/edit/merge/delete/continue/export);
+  die Extension prüft sie, bevor sie Daten verändert.
+
+  Sicherheit: strenge CSP ohne Inline-Styles/-Handler (Skript und Styles nur mit Nonce),
+  alle Nutzertexte laufen durch esc(). Farben deshalb über Klassen, nie über style="…".
+  {{nonce}} und {{csp}} ersetzt extension.js beim Öffnen.
+-->
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src {{csp}} 'nonce-{{nonce}}'; script-src 'nonce-{{nonce}}';">
+<style nonce="{{nonce}}">
+  :root {
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+    --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --other: #8c8c88;
+  }
+  body.vscode-dark, body.vscode-high-contrast {
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #7a7a76;
+  }
+  /* Raster aus Inhalt und Footer: bei kurzen Seiten sitzt der Footer unten am Fenster */
+  body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); background: var(--vscode-editor-background); margin: 0; padding: 8px 20px 16px; max-width: 1100px; min-height: 100vh; box-sizing: border-box; display: grid; grid-template-rows: 1fr auto; }
+  main { min-width: 0; }
+  .footer { padding-top: 40px; text-align: center; font-size: .85em; color: var(--vscode-descriptionForeground); }
+  .icons { position: relative; display: inline-block; width: 1.2em; height: 1.2em; vertical-align: -0.25em; margin: 0 .1em; }
+  /* Drei Icons, je 5 s sichtbar, weich überblendet (15-s-Zyklus, versetzt) */
+  .icons svg { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; animation: icon-cycle 15s ease-in-out infinite; }
+  .icons .i1 { animation-delay: -0.75s; }
+  .icons .i2 { animation-delay: 4.25s; }
+  .icons .i3 { animation-delay: 9.25s; }
+  @keyframes icon-cycle { 0% { opacity: 0; } 5% { opacity: 1; } 31% { opacity: 1; } 36% { opacity: 0; } 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .icons svg { animation: none; } .icons .i1 { opacity: 1; } }
+  h2 { font-size: 1.1em; margin: 26px 0 10px; font-weight: 600; }
+  .muted { color: var(--vscode-descriptionForeground); }
+  .card { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .spread { justify-content: space-between; }
+  .title { font-size: 1.08em; font-weight: 600; }
+  .chip { font-size: .85em; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); }
+  .chip.project { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); border-color: transparent; }
+  .badge { font-size: .85em; padding: 1px 8px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+  .badge.warn { background: var(--vscode-statusBarItem-warningBackground); color: var(--vscode-statusBarItem-warningForeground); }
+  .kpis { display: flex; gap: 28px; margin: 10px 0 4px; flex-wrap: wrap; }
+  .kpi b { display: block; font-size: 1.45em; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .kpi span { font-size: .85em; color: var(--vscode-descriptionForeground); }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--vscode-panel-border); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { font-weight: 600; color: var(--vscode-descriptionForeground); font-size: .9em; }
+  tr.sum td { font-weight: 600; border-bottom: none; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--vscode-list-hoverBackground); }
+  button { font: inherit; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 4px 12px; border-radius: 3px; cursor: pointer; }
+  button:hover { background: var(--vscode-button-hoverBackground); }
+  button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  button.link { background: none; color: var(--vscode-textLink-foreground); padding: 0 2px; }
+  button.link:hover { text-decoration: underline; }
+  .seg { display: inline-flex; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow: hidden; }
+  .seg button { background: none; color: var(--vscode-foreground); border-radius: 0; padding: 3px 10px; }
+  .seg button.on { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  select, input[type=text] { font: inherit; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 3px; padding: 3px 6px; }
+  label.f { display: flex; flex-direction: column; gap: 2px; font-size: .85em; color: var(--vscode-descriptionForeground); }
+  .filters { position: sticky; top: 0; background: var(--vscode-editor-background); padding: 8px 0; z-index: 2; border-bottom: 1px solid var(--vscode-panel-border); }
+  .scroll { overflow-x: auto; }
+  details summary { cursor: pointer; color: var(--vscode-textLink-foreground); margin-top: 6px; font-size: .9em; }
+  .edit { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; align-items: end; width: 100%; }
+  .bulk { background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-focusBorder); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .9em; margin: 6px 0 4px; }
+  .c1 { background: var(--s1); } .c2 { background: var(--s2); } .c3 { background: var(--s3); } .c4 { background: var(--s4); }
+  .c5 { background: var(--s5); } .c6 { background: var(--s6); } .c7 { background: var(--s7); } .c8 { background: var(--s8); } .co { background: var(--other); }
+  #chart .f1 { fill: var(--s1); } #chart .f2 { fill: var(--s2); } #chart .f3 { fill: var(--s3); } #chart .f4 { fill: var(--s4); }
+  #chart .f5 { fill: var(--s5); } #chart .f6 { fill: var(--s6); } #chart .f7 { fill: var(--s7); } #chart .f8 { fill: var(--s8); } #chart .fo { fill: var(--other); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  #chart { position: relative; }
+  #chart svg { display: block; width: 100%; }
+  #chart .grid { stroke: var(--vscode-panel-border); stroke-width: 1; }
+  #chart text { fill: var(--vscode-descriptionForeground); font-size: 11px; font-family: var(--vscode-font-family); }
+  #chart .hit { fill: transparent; }
+  #chart .hit:hover, #chart .hit.active { fill: var(--vscode-list-hoverBackground); }
+  .tip { position: absolute; pointer-events: none; background: var(--vscode-editorHoverWidget-background); color: var(--vscode-editorHoverWidget-foreground); border: 1px solid var(--vscode-editorHoverWidget-border); border-radius: 4px; padding: 6px 10px; font-size: .9em; white-space: nowrap; z-index: 5; display: none; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+  .tip td { border: none; padding: 1px 4px; }
+  input[type=checkbox] { margin: 0; }
+</style>
+</head>
+<body>
+<main>
+<h2>Aktuelles Tracking</h2>
+<div id="current"></div>
+
+<div class="filters row">
+  <label class="f">Projekt <select id="fProject"></select></label>
+  <label class="f">Tag <select id="fTag"></select></label>
+  <label class="f">Zeitraum
+    <select id="fPeriod">
+      <option value="7">Letzte 7 Tage</option>
+      <option value="30">Letzte 30 Tage</option>
+      <option value="90">Letzte 90 Tage</option>
+      <option value="0">Alles</option>
+    </select>
+  </label>
+  <label class="f">Suche <input type="text" id="fSearch" placeholder="Name …"></label>
+</div>
+
+<div id="summary"></div>
+
+<div class="card">
+  <div class="row spread">
+    <span class="title">Verbrauch nach Modell</span>
+    <div class="row">
+      <div class="seg" id="tMetric"><button data-v="cost">API-Preis</button><button data-v="tokens">Tokens</button></div>
+      <div class="seg" id="tGrain"><button data-v="day">Tage</button><button data-v="week">Wochen</button></div>
+      <div class="seg" id="tView"><button data-v="chart">Diagramm</button><button data-v="table">Tabelle</button></div>
+    </div>
+  </div>
+  <div class="legend" id="legend"></div>
+  <div id="chart"><div class="tip" id="tip"></div><div id="chartBody"></div></div>
+</div>
+
+<h2>Projekte</h2>
+<div id="projects"></div>
+
+<div class="row spread"><h2>Verlauf</h2><button class="secondary" id="export">CSV exportieren</button></div>
+<div id="bulk"></div>
+<div id="history"></div>
+</main>
+
+<footer class="footer">
+  Entwickelt mit
+  <!-- Icons: Material Design Icons (Pictogrammers, Apache 2.0) – heart, cannabis, bottle-soda-classic.
+       Einfarbig in Textfarbe über currentColor. -->
+  <span class="icons" role="img" aria-label="Herz">
+    <svg class="i1" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"/></svg>
+    <svg class="i2" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11.5,22V17.35C11,18.13 10,19.09 8.03,19.81C8.03,19.81 8.53,18.1 9.94,16.95C8.64,17.23 6.68,17.19 4,16C4,16 6.47,14.59 9.28,14.97C7.69,14 5.7,12.08 4.17,8.11C4.17,8.11 8.67,9.34 10.91,13.14C8.88,8.24 12,2 12,2C14.43,7.47 13.91,11.1 13.12,13.1C15.37,9.33 19.83,8.11 19.83,8.11C18.3,12.08 16.31,14 14.72,14.97C17.53,14.59 20,16 20,16C17.32,17.19 15.36,17.23 14.06,16.95C15.47,18.1 15.97,19.81 15.97,19.81C14,19.09 13,18.13 12.5,17.35V22H11.5Z"/></svg>
+    <svg class="i3" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15 13.77A3 3 0 0 0 15 18.23V20A2 2 0 0 1 13 22H11A2 2 0 0 1 9 20V18.23A3 3 0 0 0 9 13.77V9A12.28 12.28 0 0 0 10.91 4H10V2H14V4H13.09A12.28 12.28 0 0 0 15 9Z"/></svg>
+  </span>
+  von Peter R. Stuhlmann und Claude Code, Modellpreise Stand <span id="pricesDate">–</span>
+</footer>
+
+<script nonce="{{nonce}}">
+  const vscode = acquireVsCodeApi();
+  const nf = new Intl.NumberFormat('de-DE');
+  const df = new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const dec = (n, d) => n.toFixed(d).replace('.', ',');
+  const short = (n = 0) => n >= 1e9 ? dec(n / 1e9, 2) + ' Mrd.' : n >= 1e6 ? dec(n / 1e6, 2) + ' Mio.' : n >= 1e3 ? dec(n / 1e3, 1) + ' k' : String(Math.round(n));
+  const usd = (n = 0) => '$' + (n === 0 ? '0' : n >= 100 ? nf.format(Math.round(n)) : n >= 1 ? dec(n, 2) : dec(n, 3));
+  const dur = (ms) => { const m = Math.floor(ms / 60000), h = Math.floor(m / 60); return h ? `${h} h ${String(m % 60).padStart(2, '0')} min` : `${m} min`; };
+  const KEYS = ['requests', 'input', 'output', 'cacheWrite', 'cacheRead', 'cost', 'unpriced'];
+  const empty = () => Object.fromEntries(KEYS.map((k) => [k, 0]));
+  const add = (t, b) => { for (const k of KEYS) t[k] += b[k] || 0; return t; };
+  const sum = (models) => Object.values(models || {}).reduce(add, empty());
+  const fresh = (b) => b.input + b.output + b.cacheWrite;
+  const STATE = { running: ['läuft', ''], idle: ['inaktiv', 'warn'], paused: ['pausiert', 'warn'] };
+
+  function pretty(m) {
+    let s = m.replace(/^claude-/, '');
+    const big = /\[1m\]$/i.test(s);
+    s = s.replace(/\[.*\]$/, '').replace(/-\d{8}$/, '');
+    let mm = s.match(/^([a-z]+)-([\d-]+)$/) || s.match(/^([\d-]+)-([a-z]+)$/);
+    if (mm) {
+      const [fam, ver] = /^\d/.test(mm[1]) ? [mm[2], mm[1]] : [mm[1], mm[2]];
+      s = fam[0].toUpperCase() + fam.slice(1) + ' ' + ver.replace(/-/g, '.');
+    }
+    return s + (big ? ' (1M)' : '');
+  }
+
+  // ---------- Zustand ----------
+  let data = { current: null, history: [] };
+  const ui = Object.assign(
+    { project: '', tag: '', period: '30', search: '', metric: 'cost', grain: 'day', view: 'chart' },
+    vscode.getState() || {}
+  );
+  const selected = new Set();
+  const openDetails = new Set(['current']);
+  let editing = null;
+  const save = () => vscode.setState(ui);
+
+  const daysOf = (e) => e.days && Object.keys(e.days).length ? e.days : { [dayKey(e.start)]: e.models };
+  function dayKey(t) { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+  const sinceTs = () => +ui.period ? new Date().setHours(0, 0, 0, 0) - (+ui.period - 1) * 864e5 : 0;
+
+  function allEntries() { return (data.current ? [data.current] : []).concat(data.history); }
+
+  function filtered() {
+    const since = sinceTs();
+    const q = ui.search.trim().toLowerCase();
+    return allEntries().filter((e) =>
+      (!ui.project || (e.project || '') === ui.project) &&
+      (!ui.tag || (e.tags || []).includes(ui.tag)) &&
+      (e.id === 'current' || (e.end ?? Date.now()) >= since) &&
+      (!q || e.name.toLowerCase().includes(q))
+    );
+  }
+
+  // Farbe gehört zum Modell, nicht zum Rang im Filter: Reihenfolge aus allen Daten.
+  function modelOrder() {
+    const tot = {};
+    for (const e of allEntries()) for (const [m, b] of Object.entries(e.models)) tot[m] = (tot[m] || 0) + (b.cost || 0) + fresh(b) / 1e9;
+    return Object.keys(tot).sort((a, b) => tot[b] - tot[a]);
+  }
+  // Klassen-Suffix (1–8 oder o) statt Inline-Styles – die CSP des Webviews blockiert style-Attribute
+  const colorOf = (order) => (m) => { const i = order.indexOf(m); return i >= 0 && i < 8 ? String(i + 1) : 'o'; };
+
+  // ---------- Karten ----------
+  function modelTable(models, order) {
+    const rows = Object.entries(models).sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+    if (!rows.length) return '<p class="muted">Noch keine Tokens gezählt.</p>';
+    const col = colorOf(order);
+    const row = (label, b, cls = '', sw = '') => `<tr class="${cls}"><td>${sw}${esc(label)}</td><td>${nf.format(b.requests)}</td><td>${nf.format(b.input)}</td><td>${nf.format(b.output)}</td><td>${nf.format(b.cacheWrite)}</td><td>${nf.format(b.cacheRead)}</td><td>${nf.format(b.input + b.output + b.cacheWrite + b.cacheRead)}</td><td>${b.unpriced ? '≥ ' : ''}${usd(b.cost)}</td></tr>`;
+    return `<div class="scroll"><table>
+      <tr><th>Modell</th><th>Requests</th><th>Input</th><th>Output</th><th>Cache-Write</th><th>Cache-Read</th><th>Gesamt</th><th>API-Preis</th></tr>
+      ${rows.map(([m, b]) => row(pretty(m), b, '', `<span class="sw c${col(m)}"></span>`)).join('')}
+      ${rows.length > 1 ? row('Summe', sum(models), 'sum') : ''}
+    </table></div>`;
+  }
+
+  function editForm(e) {
+    const projects = [...new Set(allEntries().map((x) => x.project).filter(Boolean))];
+    return `<form class="edit" data-edit="${esc(e.id)}">
+      <label class="f">Name <input type="text" name="name" value="${esc(e.name)}"></label>
+      <label class="f">Projekt <input type="text" name="project" list="projlist" value="${esc(e.project || '')}"></label>
+      <label class="f">Tags (mit Komma getrennt) <input type="text" name="tags" value="${esc((e.tags || []).join(', '))}"></label>
+      <datalist id="projlist">${projects.map((p) => `<option value="${esc(p)}">`).join('')}</datalist>
+      <div class="row"><button type="submit">Speichern</button><button type="button" class="secondary" data-cancel>Abbrechen</button></div>
+    </form>`;
+  }
+
+  function card(e, order) {
+    const live = e.id === 'current';
+    const t = sum(e.models);
+    const chips = (e.project ? `<span class="chip project">${esc(e.project)}</span>` : '') + (e.tags || []).map((g) => `<span class="chip">#${esc(g)}</span>`).join('');
+    const [stLabel, stCls] = live ? STATE[e.state] : [];
+    const head = editing === e.id ? editForm(e) : `
+      <div class="row">
+        ${live ? '' : `<input type="checkbox" data-sel="${esc(e.id)}" ${selected.has(e.id) ? 'checked' : ''} title="Zum Zusammenführen auswählen">`}
+        <span class="title">${esc(e.name)}</span>${chips}
+        ${live ? `<span class="badge ${stCls}">${stLabel}</span>${e.continues ? '<span class="chip">Fortsetzung</span>' : ''}` : ''}
+      </div>
+      <div class="row">
+        <button class="link" data-editbtn="${esc(e.id)}">Bearbeiten</button>
+        ${live
+          ? `<button data-cmd="togglePause">${e.state === 'running' ? 'Pause' : 'Weiter'}</button><button data-cmd="stop">Stopp</button><button class="secondary" data-cmd="discard">Verwerfen</button>`
+          : `<button class="link" data-continue="${esc(e.id)}">Fortsetzen</button><button class="link" data-del="${esc(e.id)}">Löschen</button>`}
+      </div>`;
+    const when = live ? `seit ${df.format(e.start)}` : `${df.format(e.start)} – ${df.format(e.end)}`;
+    return `<div class="card">
+      <div class="row spread">${head}</div>
+      <div class="muted">${when} · aktiv ${dur(e.activeMs)} · ${esc(e.scopeLabel)}</div>
+      <div class="kpis">
+        <div class="kpi"><b>${t.unpriced ? '≥ ' : ''}${usd(t.cost)}</b><span>API-Preis (theoretisch)</span></div>
+        <div class="kpi"><b>${short(fresh(t))}</b><span>Tokens ohne Cache-Read</span></div>
+        <div class="kpi"><b>${short(t.output)}</b><span>Output</span></div>
+        <div class="kpi"><b>${short(t.cacheRead)}</b><span>Cache-Read</span></div>
+        <div class="kpi"><b>${nf.format(t.requests)}</b><span>Requests</span></div>
+      </div>
+      <details data-details="${esc(e.id)}" ${openDetails.has(e.id) ? 'open' : ''}><summary>Nach Modell</summary>${modelTable(e.models, order)}</details>
+    </div>`;
+  }
+
+  // ---------- Filter & Übersicht ----------
+  function setOptions(sel, values, allLabel, current) {
+    const html = `<option value="">${allLabel}</option>` + values.map((v) => `<option value="${esc(v)}">${esc(v === '\u0000' ? 'Ohne Projekt' : v)}</option>`).join('');
+    if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+    sel.value = values.includes(current) ? current : '';
+  }
+
+  function renderFilters() {
+    const entries = allEntries();
+    setOptions(document.getElementById('fProject'), [...new Set(entries.map((e) => e.project).filter(Boolean))].sort(), 'Alle', ui.project);
+    setOptions(document.getElementById('fTag'), [...new Set(entries.flatMap((e) => e.tags || []))].sort(), 'Alle', ui.tag);
+    document.getElementById('fPeriod').value = ui.period;
+    for (const [id, key] of [['tMetric', 'metric'], ['tGrain', 'grain'], ['tView', 'view']]) {
+      for (const b of document.querySelectorAll(`#${id} button`)) b.classList.toggle('on', b.dataset.v === ui[key]);
+    }
+  }
+
+  function renderSummary(list) {
+    const t = list.reduce((acc, e) => add(acc, sum(e.models)), empty());
+    const ms = list.reduce((a, e) => a + e.activeMs, 0);
+    setHtml(document.getElementById('summary'), `<div class="kpis">
+      <div class="kpi"><b>${t.unpriced ? '≥ ' : ''}${usd(t.cost)}</b><span>API-Preis im Filter</span></div>
+      <div class="kpi"><b>${short(fresh(t))}</b><span>Tokens ohne Cache-Read</span></div>
+      <div class="kpi"><b>${dur(ms)}</b><span>aktive Zeit</span></div>
+      <div class="kpi"><b>${list.length}</b><span>Trackings</span></div>
+    </div>
+    <p class="muted" id="pricesNote">API-Preis: was dieselbe Nutzung über die Anthropic-API kosten würde. Mit dem Abo zahlst du nicht pro Token.</p>`);
+  }
+
+  function renderProjects(list) {
+    const by = {};
+    for (const e of list) {
+      const p = (by[e.project || ''] ||= { n: 0, ms: 0, t: empty() });
+      p.n++; p.ms += e.activeMs; add(p.t, sum(e.models));
+    }
+    const rows = Object.entries(by).sort((a, b) => b[1].t.cost - a[1].t.cost);
+    setHtml(document.getElementById('projects'), rows.length ? `<div class="card scroll"><table>
+      <tr><th>Projekt</th><th>Trackings</th><th>Aktiv</th><th>Tokens o. Cache-Read</th><th>Output</th><th>API-Preis</th></tr>
+      ${rows.map(([p, v]) => `<tr class="${p ? 'click' : ''}" ${p ? `data-project="${esc(p)}"` : ''} title="${p ? 'Nach diesem Projekt filtern' : ''}"><td>${p ? esc(p) : '<span class="muted">Ohne Projekt</span>'}</td><td>${v.n}</td><td>${dur(v.ms)}</td><td>${short(fresh(v.t))}</td><td>${short(v.t.output)}</td><td>${usd(v.t.cost)}</td></tr>`).join('')}
+    </table></div>` : '<p class="muted">Keine Einträge im Filter.</p>');
+  }
+
+  // ---------- Diagramm ----------
+  function isoWeek(d) {
+    const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const day = t.getUTCDay() || 7;
+    t.setUTCDate(t.getUTCDate() + 4 - day);
+    return Math.ceil(((t - Date.UTC(t.getUTCFullYear(), 0, 1)) / 864e5 + 1) / 7);
+  }
+  const monday = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+
+  function buckets(list) {
+    const perDay = {};
+    for (const e of list) for (const [day, models] of Object.entries(daysOf(e))) {
+      const d = (perDay[day] ||= {});
+      for (const [m, b] of Object.entries(models)) add((d[m] ||= empty()), b);
+    }
+    const keys = Object.keys(perDay).sort();
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const maxCols = ui.grain === 'day' ? 92 : 104;
+    let from = +ui.period ? new Date(sinceTs()) : keys.length ? new Date(keys[0] + 'T00:00') : today;
+    const out = [];
+    if (ui.grain === 'day') {
+      for (let d = new Date(from); d <= today; d.setDate(d.getDate() + 1)) {
+        const k = dayKey(d);
+        out.push({ key: k, label: `${d.getDate()}.${d.getMonth() + 1}.`, long: d.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' }), models: perDay[k] || {} });
+      }
+    } else {
+      for (let d = monday(from); d <= today; d.setDate(d.getDate() + 7)) {
+        const models = {};
+        for (let i = 0; i < 7; i++) {
+          const x = new Date(d); x.setDate(x.getDate() + i);
+          for (const [m, b] of Object.entries(perDay[dayKey(x)] || {})) add((models[m] ||= empty()), b);
+        }
+        out.push({ key: dayKey(d), label: `KW ${isoWeek(d)}`, long: `KW ${isoWeek(d)} · ab ${d.toLocaleDateString('de-DE')}`, models });
+      }
+    }
+    return out.slice(-maxCols);
+  }
+
+  function niceMax(v) {
+    if (v <= 0) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+    return 10 * p;
+  }
+
+  const topRounded = (x, y, w, h, r) => {
+    r = Math.min(r, w / 2, h);
+    return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+  };
+
+  let cols = [];
+  // Setzt HTML nur, wenn es sich geändert hat. Unveränderte Bereiche bleiben
+  // unangetastet – kein Flackern, kein Springen, Fokus und Auswahl bleiben erhalten.
+  function setHtml(el, html) {
+    if (el.__html === html) return;
+    el.innerHTML = html;
+    el.__html = html;
+  }
+
+  // Für den Tooltip (Ereignisse hängen einmalig am Diagramm, siehe unten)
+  let chart = { cols: [], used: [], val: () => 0, fmt: String, col: () => 'o' };
+
+  // Wichtig: Der neue Inhalt wird komplett vorbereitet und in einem Schritt eingesetzt.
+  // Früher wurde das alte Diagramm erst entfernt und dann die Breite gemessen – die
+  // Seite war dabei kurz 230 px kürzer, und der Browser hat nahe am Seitenende die
+  // Scroll-Position nach oben gesetzt.
+  function renderChart(list, order) {
+    const col = colorOf(order);
+    const val = (b) => ui.metric === 'cost' ? b.cost : fresh(b);
+    const fmt = ui.metric === 'cost' ? usd : short;
+    cols = buckets(list);
+    const used = order.filter((m) => cols.some((c) => c.models[m]));
+    chart = { cols, used, val, fmt, col };
+    setHtml(document.getElementById('legend'), used.map((m) => `<span><span class="sw c${col(m)}"></span>${esc(pretty(m))}</span>`).join(''));
+    const host = document.getElementById('chart');
+    const body = document.getElementById('chartBody');
+    const W = Math.max(320, host.clientWidth); // messen, bevor sich etwas ändert
+
+    const totals = cols.map((c) => Object.values(c.models).reduce((a, b) => a + val(b), 0));
+    if (!totals.some((v) => v > 0)) return setHtml(body, '<p class="muted">Keine Daten im Zeitraum.</p>');
+
+    if (ui.view === 'table') {
+      const rows = cols.filter((c, i) => totals[i] > 0).reverse();
+      return setHtml(body, `<div class="scroll"><table>
+        <tr><th>${ui.grain === 'day' ? 'Tag' : 'Woche'}</th>${used.map((m) => `<th>${esc(pretty(m))}</th>`).join('')}<th>Summe</th></tr>
+        ${rows.map((c) => `<tr><td>${esc(c.long)}</td>${used.map((m) => `<td>${c.models[m] ? fmt(val(c.models[m])) : '–'}</td>`).join('')}<td><b>${fmt(Object.values(c.models).reduce((a, b) => a + val(b), 0))}</b></td></tr>`).join('')}
+      </table></div>`);
+    }
+
+    const H = 230, L = 52, R = 8, T = 10, B = 24;
+    const pw = W - L - R, ph = H - T - B;
+    const max = niceMax(Math.max(...totals));
+    const band = pw / cols.length;
+    const bw = Math.max(2, Math.min(32, band - 2));
+    const y = (v) => T + ph - (v / max) * ph;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Verbrauch pro ${ui.grain === 'day' ? 'Tag' : 'Woche'}">`;
+    for (let i = 0; i <= 4; i++) {
+      const v = (max / 4) * i, yy = y(v);
+      svg += `<line class="grid" x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}"/><text x="${L - 6}" y="${yy + 4}" text-anchor="end">${fmt(v)}</text>`;
+    }
+    const every = Math.ceil(cols.length / Math.max(1, Math.floor(pw / 48)));
+    cols.forEach((c, i) => {
+      const x = L + i * band + (band - bw) / 2;
+      svg += `<rect class="hit" data-i="${i}" x="${L + i * band}" y="${T}" width="${band}" height="${ph}"/>`;
+      const segs = used.filter((m) => c.models[m] && val(c.models[m]) > 0);
+      let base = T + ph;
+      segs.forEach((m, si) => {
+        const h = (val(c.models[m]) / max) * ph;
+        const gap = si > 0 && h > 3 ? 2 : 0; // Abstand zwischen gestapelten Segmenten
+        const top = base - h;
+        const hh = h - gap;
+        if (hh > 0) {
+          svg += si === segs.length - 1
+            ? `<path d="${topRounded(x, top, bw, hh, 4)}" class="f${col(m)}" pointer-events="none"/>`
+            : `<rect x="${x}" y="${top}" width="${bw}" height="${hh}" class="f${col(m)}" pointer-events="none"/>`;
+        }
+        base = top;
+      });
+      if (i % every === 0) svg += `<text x="${L + i * band + band / 2}" y="${H - 6}" text-anchor="middle">${esc(c.label)}</text>`;
+    });
+    svg += `<line x1="${L}" x2="${W - R}" y1="${T + ph}" y2="${T + ph}" stroke="var(--vscode-descriptionForeground)" stroke-width="1"/></svg>`;
+    setHtml(body, svg);
+  }
+
+  // Tooltip: einmalig per Delegation, liest immer den aktuellen Diagramm-Stand
+  {
+    const host = document.getElementById('chart');
+    const tip = document.getElementById('tip');
+    const hide = () => { tip.style.display = 'none'; host.querySelectorAll('.hit.active').forEach((n) => n.classList.remove('active')); };
+    host.addEventListener('mousemove', (ev) => {
+      const hit = ev.target.closest('.hit');
+      host.querySelectorAll('.hit.active').forEach((n) => n !== hit && n.classList.remove('active'));
+      const c = hit && chart.cols[+hit.dataset.i];
+      if (!c) return hide();
+      const { used, val, fmt, col } = chart;
+      hit.classList.add('active');
+      const items = used.filter((m) => c.models[m]).reverse();
+      const total = Object.values(c.models).reduce((a, b) => a + val(b), 0);
+      tip.innerHTML = `<b>${esc(c.long)}</b><table>${items.map((m) => `<tr><td><span class="sw c${col(m)}"></span>${esc(pretty(m))}</td><td>${fmt(val(c.models[m]))}</td></tr>`).join('')}<tr><td><b>Summe</b></td><td><b>${fmt(total)}</b></td></tr></table>`;
+      tip.style.display = 'block';
+      const r = host.getBoundingClientRect();
+      let left = ev.clientX - r.left + 14;
+      if (left + tip.offsetWidth > r.width) left = ev.clientX - r.left - tip.offsetWidth - 14;
+      tip.style.left = Math.max(0, left) + 'px';
+      tip.style.top = Math.max(0, ev.clientY - r.top - tip.offsetHeight / 2) + 'px';
+    });
+    host.addEventListener('mouseleave', hide);
+  }
+
+  // ---------- Gesamt-Render ----------
+  // fromUpdate: Aufruf durch die regelmäßigen Daten-Updates. Dann ein offenes
+  // Bearbeiten-Formular nicht überschreiben, damit die Eingabe erhalten bleibt.
+  function render(fromUpdate = false) {
+    // Scroll-Position über das Neuzeichnen hinweg festhalten
+    const scrollY = window.scrollY;
+    const order = modelOrder();
+    const keep = (id) => fromUpdate && editing !== null && (id === 'current') === (editing === 'current');
+    if (!keep('current')) {
+      setHtml(document.getElementById('current'), data.current
+        ? card(data.current, order)
+        : '<div class="card row spread"><span class="muted">Kein Tracking aktiv.</span><button data-cmd="start">Start</button></div>');
+    }
+    renderFilters();
+    const list = filtered();
+    renderSummary(list);
+    renderChart(list, order);
+    renderProjects(list);
+    for (const id of [...selected]) if (!data.history.some((e) => e.id === id)) selected.delete(id);
+    setHtml(document.getElementById('bulk'), selected.size
+      ? `<div class="card bulk row spread"><span>${selected.size} ausgewählt</span><div class="row">${selected.size > 1 ? '<button data-merge>Zusammenführen</button>' : ''}<button class="secondary" data-clearsel>Auswahl aufheben</button></div></div>`
+      : '');
+    if (!keep('history')) {
+      const hist = list.filter((e) => e.id !== 'current');
+      setHtml(document.getElementById('history'), hist.length
+        ? hist.map((e) => card(e, order)).join('')
+        : '<p class="muted">Keine abgeschlossenen Trackings im Filter.</p>');
+    }
+    if (window.scrollY !== scrollY) window.scrollTo(0, scrollY);
+  }
+
+  window.addEventListener('message', ({ data: msg }) => {
+    if (msg.type !== 'state') return;
+    data = msg;
+    // JJJJ-MM-TT -> TT.MM.JJJJ
+    if (msg.pricesAsOf) document.getElementById('pricesDate').textContent = msg.pricesAsOf.split('-').reverse().join('.');
+    if (editing && editing !== 'current' && !data.history.some((e) => e.id === editing)) editing = null;
+    if (editing === 'current' && !data.current) editing = null;
+    render(true);
+  });
+
+  // ---------- Interaktion ----------
+  const onFilter = (id, key, ev = 'change') => document.getElementById(id).addEventListener(ev, (e) => { ui[key] = e.target.value; save(); render(); });
+  onFilter('fProject', 'project');
+  onFilter('fTag', 'tag');
+  onFilter('fPeriod', 'period');
+  onFilter('fSearch', 'search', 'input');
+  document.getElementById('fSearch').value = ui.search;
+
+  document.addEventListener('click', (ev) => {
+    const seg = ev.target.closest('.seg button');
+    if (seg) {
+      ui[{ tMetric: 'metric', tGrain: 'grain', tView: 'view' }[seg.parentElement.id]] = seg.dataset.v;
+      save(); render(); return;
+    }
+    const proj = ev.target.closest('tr[data-project]');
+    if (proj) { ui.project = proj.dataset.project; save(); render(); return; }
+    const sel = ev.target.closest('[data-sel]');
+    if (sel) { sel.checked ? selected.add(sel.dataset.sel) : selected.delete(sel.dataset.sel); render(); return; }
+    const b = ev.target.closest('button');
+    if (!b) return;
+    if (b.dataset.cmd) vscode.postMessage({ type: 'command', command: b.dataset.cmd });
+    else if (b.dataset.del) vscode.postMessage({ type: 'delete', id: b.dataset.del });
+    else if (b.dataset.continue) vscode.postMessage({ type: 'continue', id: b.dataset.continue });
+    else if (b.dataset.editbtn) { editing = b.dataset.editbtn; render(); document.querySelector('form.edit input')?.focus(); }
+    else if (b.hasAttribute('data-cancel')) { editing = null; render(); }
+    else if (b.hasAttribute('data-merge')) {
+      // Reihenfolge wie im Verlauf: der oberste (neueste) Eintrag gibt Name und Projekt vor
+      vscode.postMessage({ type: 'merge', ids: data.history.filter((e) => selected.has(e.id)).map((e) => e.id) });
+      selected.clear();
+    }
+    else if (b.hasAttribute('data-clearsel')) { selected.clear(); render(); }
+    else if (b.id === 'export') vscode.postMessage({ type: 'export' });
+  });
+
+  document.addEventListener('submit', (ev) => {
+    const f = ev.target.closest('form.edit');
+    if (!f) return;
+    ev.preventDefault();
+    const field = (n) => f.elements.namedItem(n).value;
+    const tags = field('tags').split(',').map((s) => s.trim().replace(/^#/, '')).filter(Boolean);
+    vscode.postMessage({ type: 'edit', id: f.dataset.edit, name: field('name'), project: field('project'), tags });
+    editing = null;
+  });
+
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && editing) { editing = null; render(); } });
+  document.addEventListener('toggle', (ev) => {
+    const d = ev.target;
+    if (d.dataset && d.dataset.details) d.open ? openDetails.add(d.dataset.details) : openDetails.delete(d.dataset.details);
+  }, true);
+  let chartWidth = 0;
+  new ResizeObserver(([e]) => {
+    if (Math.abs(e.contentRect.width - chartWidth) < 1) return;
+    chartWidth = e.contentRect.width;
+    renderChart(filtered(), modelOrder());
+  }).observe(document.getElementById('chart'));
+
+  vscode.postMessage({ type: 'ready' });
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Panel-Tests nutzen Edge oder Chrome; auf allen GitHub-Runnern ist Chrome installiert
+      - run: npm test
+      - name: Tests im echten VS Code
+        if: runner.os != 'Linux'
+        run: npm run test:vscode
+      - name: Tests im echten VS Code (Linux, virtueller Bildschirm)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:vscode
